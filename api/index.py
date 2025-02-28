@@ -1,7 +1,7 @@
 import os
 import requests
 import mailersend
-from moralis import streams, wallet
+from moralis import streams, wallets
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from flask import Flask, render_template, jsonify, request
