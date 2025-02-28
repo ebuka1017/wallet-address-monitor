@@ -1,5 +1,7 @@
 import os
 import requests
+import mailersend
+from moralis import streams, wallet
 from dotenv import load_dotenv
 from supabase import create_client, Client
 import tkinter as tk
