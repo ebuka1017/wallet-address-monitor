@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Transaction Monitor</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        button { padding: 10px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Transaction Monitor</h1>
+    <button id="start">Start Monitoring</button>
+    <button id="stop">Stop Monitoring</button>
+    <button id="refresh">Refresh</button>
+    <h2>Monitored Addresses</h2>
+    <ul id="addresses">
+        {% for addr in addresses %}
+        <li>{{ addr['address'] }} ({{ addr['blockchain'] }})</li>
+        {% endfor %}
+    </ul>
+    <h2>Recent Transactions</h2>
+    <table id="transactions">
+        <tr>
+            <th>From</th>
+            <th>To</th>
+            <th>Amount</th>
+            <th>Token</th>
+            <th>Destination</th>
+            <th>Tx Hash</th>
+        </tr>
+        {% for tx in transactions %}
+        <tr>
+            <td>{{ tx['from_address'] }}</td>
+            <td>{{ tx['to_address'] }}</td>
+            <td>{{ tx['amount'] }}</td>
+            <td>{{ tx['token_name'] }}</td>
+            <td>{{ tx['destination'] }}</td>
+            <td>{{ tx['tx_hash'] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <script>
+        $(document).ready(function() {
+            $('#start').click(function() {
+                $.post('/start', function(data) {
+                    alert('Monitoring started');
+                });
+            });
+            $('#stop').click(function() {
+                $.post('/stop', function(data) {
+                    alert('Monitoring stopped');
+                });
+            });
+            $('#refresh').click(function() {
+                $.post('/refresh', function(data) {
+                    alert('Monitoring refreshed');
+                    updateData();
+                });
+            });
+            function updateData() {
+                $.get('/data', function(data) {
+                    $('#addresses').empty();
+                    data.addresses.forEach(function(addr) {
+                        $('#addresses').append('<li>' + addr.address + ' (' + addr.blockchain + ')</li>');
+                    });
+                    $('#transactions').find("tr:gt(0)").remove();
+                    data.transactions.forEach(function(tx) {
+                        $('#transactions').append(
+                            '<tr><td>' + tx.from_address + '</td><td>' + tx.to_address + '</td><td>' + 
+                            tx.amount + '</td><td>' + tx.token_name + '</td><td>' + tx.destination + 
+                            '</td><td>' + tx.tx_hash + '</td></tr>'
+                        );
+                    });
+                });
+            }
+            setInterval(updateData, 60000); // Update every minute
+        });
+    </script>
+</body>
+</html>
