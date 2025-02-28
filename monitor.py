@@ -4,34 +4,38 @@ import mailersend
 from moralis import streams, wallet
 from dotenv import load_dotenv
 from supabase import create_client, Client
-import tkinter as tk
+from flask import Flask, render_template, jsonify, request
+from apscheduler.schedulers.background import BackgroundScheduler
 from threading import Thread
-from apscheduler.schedulers.blocking import BlockingScheduler
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Retrieve environment variables
+# Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GETBLOCK_BTC_URL = os.getenv("GETBLOCK_BTC_URL")
 GETBLOCK_ETH_URL = os.getenv("GETBLOCK_ETH_URL")
-GETBLOCK_BNB_URL = os.getenv("GETBLOCK_BNB_URL")
 MAILERSEND_API_KEY = os.getenv("MAILERSEND_API_KEY")
 MAILERSEND_DOMAIN = os.getenv("MAILERSEND_DOMAIN")
 RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
 MORALIS_API_KEY = os.getenv("MORALIS_API_KEY")
 
-# Connect to Supabase
+# Initialize Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Fetch suspicious addresses from the JSON
+# Initialize Flask app and scheduler
+app = Flask(__name__)
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# Fetch suspicious addresses
 def fetch_suspicious_addresses():
     url = "https://hackscan.hackbounty.io/public/hack-address.json"
     response = requests.get(url)
     return response.json()
 
-# Guess the blockchain based on address format
+# Determine blockchain
 def determine_blockchain(address: str) -> str:
     address = address.lower()
     if address.startswith("bc1") or address.startswith("1") or address.startswith("3"):
@@ -40,7 +44,7 @@ def determine_blockchain(address: str) -> str:
         return "ethereum"
     return None
 
-# Get the latest block number
+# Get current block number
 def get_current_block(blockchain: str) -> int:
     if blockchain == "bitcoin":
         response = requests.get(f"{GETBLOCK_BTC_URL}/blocks/tip/height")
@@ -54,7 +58,7 @@ def get_current_block(blockchain: str) -> int:
 # Fetch Bitcoin transactions
 def fetch_bitcoin_transactions(address: str, last_block: int) -> list:
     response = requests.get(f"{GETBLOCK_BTC_URL}/address/{address}")
-    txs = response.json().get("txids", [])[:10]  # Limit to 10 recent txs
+    txs = response.json().get("txids", [])[:10]
     outgoing = []
     for tx_hash in txs:
         tx_response = requests.get(f"{GETBLOCK_BTC_URL}/tx/{tx_hash}")
@@ -95,11 +99,11 @@ def fetch_ethereum_transactions(address: str, start_block: int) -> list:
                 "hash": tx_hash,
                 "block_number": int(log["blockNumber"], 16),
                 "to": tx_data.get("to"),
-                "value": int(tx_data.get("value", "0x0"), 16) / 1e18  # Convert wei to ETH
+                "value": int(tx_data.get("value", "0x0"), 16) / 1e18
             })
     return outgoing
 
-# Figure out where the funds went
+# Determine destination
 def determine_destination(to_address: str) -> str:
     url = f"https://deep-index.moralis.io/api/v2/wallet/{to_address}/labels"
     headers = {"accept": "application/json", "X-API-Key": MORALIS_API_KEY}
@@ -109,7 +113,7 @@ def determine_destination(to_address: str) -> str:
         return labels[0]["name"] if labels else "Unknown"
     return "Unknown"
 
-# Send an email alert using MailerSend
+# Send email alert
 def send_email(details: dict):
     mailersend_url = "https://api.mailersend.com/v1/email"
     headers = {
@@ -117,14 +121,8 @@ def send_email(details: dict):
         "Content-Type": "application/json"
     }
     email_data = {
-        "from": {
-            "email": f"noreply@{MAILERSEND_DOMAIN}"
-        },
-        "to": [
-            {
-                "email": RECEIVER_EMAIL
-            }
-        ],
+        "from": {"email": f"noreply@{MAILERSEND_DOMAIN}"},
+        "to": [{"email": RECEIVER_EMAIL}],
         "subject": "Suspicious Transaction Detected",
         "text": (
             f"Fund Destination: {details['destination']}\n"
@@ -140,7 +138,7 @@ def send_email(details: dict):
     else:
         print(f"Failed to send email: {response.text}")
 
-# Main monitoring function
+# Monitoring function
 def monitor():
     print("Starting monitoring run...")
     addresses = fetch_suspicious_addresses()
@@ -161,7 +159,7 @@ def monitor():
         if blockchain == "bitcoin":
             txs = fetch_bitcoin_transactions(address, last_block)
             for tx in txs:
-                amount = sum(out["value"] / 1e8 for out in tx["outputs"])  # BTC in satoshis
+                amount = sum(out["value"] / 1e8 for out in tx["outputs"])
                 destinations = [out["scriptpubkey_address"] for out in tx["outputs"]]
                 destination = "Unknown"
                 for dest in destinations:
@@ -204,45 +202,43 @@ def monitor():
                 {"last_checked_block": current_block}
             ).eq("address", address).execute()
 
-# GUI and scheduler setup
-scheduler = None
-monitoring_thread = None
+# Flask Routes
+@app.route('/')
+def index():
+    addresses = supabase.table("addresses").select("*").execute().data
+    transactions = supabase.table("transactions").select("*").order("block_number", desc=True).limit(10).execute().data
+    return render_template('index.html', addresses=addresses, transactions=transactions)
 
-def start_monitor():
-    global scheduler, monitoring_thread
-    if scheduler is None or not scheduler.running:
-        scheduler = BlockingScheduler()
-        scheduler.add_job(monitor, "interval", minutes=5)
-        monitoring_thread = Thread(target=scheduler.start, daemon=True)
-        monitoring_thread.start()
-        status_label.config(text="Monitoring active...")
+@app.route('/start', methods=['POST'])
+def start_monitoring():
+    if not scheduler.get_job('monitor'):
+        scheduler.add_job(monitor, 'interval', minutes=5, id='monitor')
+    return jsonify({"status": "started"})
 
-def stop_monitor():
-    global scheduler
-    if scheduler and scheduler.running:
+@app.route('/stop', methods=['POST'])
+def stop_monitoring():
+    if scheduler.get_job('monitor'):
+        scheduler.remove_job('monitor')
+    return jsonify({"status": "stopped"})
+
+@app.route('/refresh', methods=['POST'])
+def refresh_monitoring():
+    # Run monitor in a thread to avoid blocking the server
+    Thread(target=monitor).start()
+    return jsonify({"status": "refreshed"})
+
+@app.route('/data')
+def get_data():
+    addresses = supabase.table("addresses").select("*").execute().data
+    transactions = supabase.table("transactions").select("*").order("block_number", desc=True).limit(10).execute().data
+    return jsonify({"addresses": addresses, "transactions": transactions})
+
+def shutdown_scheduler():
+    if scheduler.running:
         scheduler.shutdown()
-        status_label.config(text="Monitoring stopped...")
 
-def refresh_monitor():
-    monitor()
-    status_label.config(text="Manual refresh done...")
-
-def on_closing():
-    stop_monitor()
-    root.destroy()
-
-# Main GUI
-def main():
-    global root, status_label
-    root = tk.Tk()
-    root.title("Transaction Monitor")
-    status_label = tk.Label(root, text="Monitoring stopped...")
-    status_label.pack(pady=5)
-    tk.Button(root, text="Start", command=start_monitor).pack(pady=5)
-    tk.Button(root, text="Stop", command=stop_monitor).pack(pady=5)
-    tk.Button(root, text="Refresh", command=refresh_monitor).pack(pady=5)
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.mainloop()
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    try:
+        app.run(debug=True)
+    finally:
+        shutdown_scheduler()
