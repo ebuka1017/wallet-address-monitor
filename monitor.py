@@ -6,18 +6,19 @@ import tkinter as tk
 from threading import Thread
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
+# Retrieve environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GETBLOCK_BTC_URL = "https://go.getblock.io/your-btc-api-key-here"
-GETBLOCK_ETH_URL = "https://go.getblock.io/your-eth-api-key-here"
-MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
-MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
+GETBLOCK_BTC_URL = os.getenv("GETBLOCK_BTC_URL")
+GETBLOCK_ETH_URL = os.getenv("GETBLOCK_ETH_URL")
+GETBLOCK_BNB_URL = os.getenv("GETBLOCK_BNB_URL")
+MAILERSEND_API_KEY = os.getenv("MAILERSEND_API_KEY")
+MAILERSEND_DOMAIN = os.getenv("MAILERSEND_DOMAIN")
 RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
-MORALIS_API_KEY = "your-moralis-api-key-here"
+MORALIS_API_KEY = os.getenv("MORALIS_API_KEY")
 
 # Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -106,26 +107,36 @@ def determine_destination(to_address: str) -> str:
         return labels[0]["name"] if labels else "Unknown"
     return "Unknown"
 
-# Send an email alert
+# Send an email alert using MailerSend
 def send_email(details: dict):
-    mailgun_url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
-    body = (
-        f"Fund Destination: {details['destination']}\n"
-        f"Destination Address: {details['to_address']}\n"
-        f"Token Amount: {details['amount']}\n"
-        f"Token Name: {details['token_name']}\n"
-        f"Tx Hash: {details['blockchain']}:{details['tx_hash']}#{details['block_number']}"
-    )
-    requests.post(
-        mailgun_url,
-        auth=("api", MAILGUN_API_KEY),
-        data={
-            "from": f"Monitor <mailgun@{MAILGUN_DOMAIN}>",
-            "to": RECEIVER_EMAIL,
-            "subject": "Suspicious Transaction Detected",
-            "text": body
-        }
-    )
+    mailersend_url = "https://api.mailersend.com/v1/email"
+    headers = {
+        "Authorization": f"Bearer {MAILERSEND_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    email_data = {
+        "from": {
+            "email": f"noreply@{MAILERSEND_DOMAIN}"
+        },
+        "to": [
+            {
+                "email": RECEIVER_EMAIL
+            }
+        ],
+        "subject": "Suspicious Transaction Detected",
+        "text": (
+            f"Fund Destination: {details['destination']}\n"
+            f"Destination Address: {details['to_address']}\n"
+            f"Token Amount: {details['amount']}\n"
+            f"Token Name: {details['token_name']}\n"
+            f"Tx Hash: {details['blockchain']}:{details['tx_hash']}#{details['block_number']}"
+        )
+    }
+    response = requests.post(mailersend_url, headers=headers, json=email_data)
+    if response.status_code == 202:
+        print("Email sent successfully")
+    else:
+        print(f"Failed to send email: {response.text}")
 
 # Main monitoring function
 def monitor():
